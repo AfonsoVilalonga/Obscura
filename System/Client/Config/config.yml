@@ -1,0 +1,6 @@
+bridgeaddr: "wss://localhost:20002/ws"
+brokerAddr: "wss://localhost:20000/ws"
+videoPath: "../../Media/output.ivf"
+audioPath: "../../Media/output.ogg"
+
+kcpListener: ":10005"

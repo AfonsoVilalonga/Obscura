@@ -1,0 +1,4 @@
+videoPath: "../../Media/output.ivf"
+audioPath: "../../Media/output.ogg"
+
+brokerAddr: "wss://localhost:20000/ws"

@@ -1,0 +1,288 @@
+<!doctype html>
+<video id="local" muted controls loop>
+    <source src="videos/a.webm" type="video/webm">
+</video>
+
+<canvas id="canvas" width="640" height="480"></canvas>
+
+<script>   
+    const PROXY_PION           = 1;
+    const PROXY_WEB            = 3;
+    const CLIENT_WEB           = 4;
+    const interval             = 3000;
+
+    const configuration = {
+        iceServers: [
+            {
+                urls: 'stun:stun.l.google.com:19302' 
+            }
+        ], 
+        encodedInsertableStreams: true,
+        forceEncodedVideoInsertableStreams: true
+    };
+
+    const signalingConn = new WebSocket("wss://192.168.10.3:20000/ws");
+    const pc = new RTCPeerConnection(configuration)
+
+    pc.onicecandidate = onIceCandidate;
+
+    function onIceCandidate(e){
+        if (e.candidate && e.candidate.candidate !== "") {
+            signalingConn.send(JSON.stringify(e.candidate))
+        }
+    }
+
+    pc.addEventListener('connectionstatechange', event => {
+        if(pc.connectionState == "failed"){
+            location.reload(true);
+        }
+        if (pc.connectionState == "connected"){
+            document.querySelector('#local').play();
+            document.querySelector('#local').muted = !document.querySelector('#local').muted
+            clearInterval(pingInterval)
+        }
+    });
+
+    pc.ontrack = e => {
+        if(e.track.kind == "video"){
+            setupReceiverTransform(e.receiver);
+        }
+    };
+
+    const localVideo = document.querySelector('#local');
+
+    let workerSend;
+    if (navigator.userAgent.toLowerCase().includes('firefox')) {
+        workerSend = new Worker('/Firefox/workerSend.js');    
+    }else{
+        workerSend = new Worker('/Chrome/workerSend.js');   
+    }
+
+    const canvas = document.querySelector('#canvas')
+        const ctx = canvas.getContext('2d');
+        
+        function handleEncodedFrame(chunk) {
+            workerSend.postMessage({ command: "chunk", c: chunk });
+        }
+
+        const encoder = new VideoEncoder({
+            output: handleEncodedFrame,
+            error: (e) => console.error(e),
+        });
+
+        encoder.configure({
+            codec: 'vp8',
+            width: 640,
+            height: 480,
+            bitrate: 500_000,
+            framerate: 30,
+        });
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        createImageBitmap(canvas).then(imageBitmap => {
+            const videoFrame = new VideoFrame(imageBitmap, { timestamp: performance.now() * 1000 });
+            encoder.encode(videoFrame);
+            videoFrame.close();
+        });
+
+
+
+    function setupReceiverTransform(receiver) {
+        if (navigator.userAgent.toLowerCase().includes('firefox')) {
+            receiver.transform = new RTCRtpScriptTransform(workerSend);  
+        }else{
+            const receiverStreams = receiver.createEncodedStreams();
+            const {
+                readable,
+                writable
+            } = receiverStreams;
+            workerSend.postMessage({command:"init", r: readable, w: writable}, [readable, writable])
+        }
+    }
+    
+    let localWebSocket 
+    workerSend.onmessage = function(event) {
+        const message = event.data;
+    
+        if (message.command == "data") {
+            localWebSocket.send(message.data)
+        }
+    };
+
+    let stream;
+    let pingInterval = null;
+    let workerRecv;    
+    let lastMessage = false;
+    let pendingCandidates = [];
+
+    function getStream() {
+        if (localVideo.captureStream) {
+            stream = localVideo.captureStream();
+        } else if (localVideo.mozCaptureStream) {
+            stream = localVideo.mozCaptureStream();
+        } else {
+            console.log('captureStream() not supported');
+        }
+    }
+
+    function waitForCanPlay(videoElement) {
+        return new Promise((resolve) => {
+            if (videoElement.readyState < 3){
+                videoElement.oncanplay = () => {
+                    getStream();
+                    resolve();
+                };
+            }else{
+                getStream()
+                resolve();
+            }
+        });
+    }
+
+    function setupSenderTransform(sender, workerRecv) {
+        if (navigator.userAgent.toLowerCase().includes('firefox')) {
+            sender.transform = new RTCRtpScriptTransform(workerRecv);  
+        }else{
+            const senderStreams = sender.createEncodedStreams();
+            const {
+                readable,
+                writable
+            } = senderStreams;
+        
+            workerRecv.postMessage({command:"init", r: readable, w: writable }, [readable, writable])
+        }
+    }
+  
+    signalingConn.addEventListener('open', (event) => {
+        console.log('WebSocket connection opened');
+        
+        const encoder = new TextEncoder();
+        const r = encoder.encode("wss://192.168.20.1:20002/ws")
+        const message = new Uint8Array([CLIENT_WEB]);
+
+        const finalMessage = new Uint8Array(message.length + r.length);
+    
+        finalMessage.set(message, 0);
+        finalMessage.set(r, message.length);
+
+        signalingConn.send(finalMessage);
+
+        pingInterval = setInterval(function() {
+            signalingConn.send("ping"); 
+        }, interval);
+    });
+
+    signalingConn.addEventListener('message', (event) => {
+        handleMessages(event.data)
+    });
+
+    function setLocalAndSendMessage(sessionDescription) {
+        pc.setLocalDescription(sessionDescription);
+        signalingConn.send(JSON.stringify(sessionDescription));
+    }
+
+    async function addCandidate(c){
+        pendingCandidates.push(c)
+    }
+
+    let firstMessageHandled = false;
+    let firstMessagePromise = null;
+    let end = false;
+    let offer = null;
+    
+
+    function handleMessages(data) {
+        if (!firstMessageHandled) {
+            firstMessageHandled = true;
+
+            firstMessagePromise = new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = async function () {
+                    const arrayBuffer = reader.result;
+                    let buffer = new Uint8Array(arrayBuffer);
+
+                    if (buffer[0] === PROXY_WEB || buffer[0] === PROXY_PION) {
+                        if (buffer[0] === PROXY_PION) {
+                            if (navigator.userAgent.toLowerCase().includes('firefox')) {
+                                workerRecv = new Worker('/Firefox/workRecvPion.js');
+                            } else {
+                                workerRecv = new Worker('/Chrome/workRecvPion.js');
+                            }
+                        } else {
+                            if (navigator.userAgent.toLowerCase().includes('firefox')) {
+                                workerRecv = new Worker('/Firefox/workRecvWeb.js');
+                            } else {
+                                workerRecv = new Worker('/Chrome/workRecvWeb.js');
+                            }
+                        }
+
+                        await waitForCanPlay(localVideo);
+
+                        stream.getTracks().forEach(track => {
+                            pc.addTrack(track, stream)
+                        }) 
+
+                        //const sender = pc.getSenders().find(s => s.track.kind === 'video');
+                        //const params = sender.getParameters();
+                        //params.encodings[0].maxBitrate = 5000000;
+                        //await sender.setParameters(params);
+                    
+                        pc.getSenders().forEach(sender => {
+                            if (sender.track.kind === "video") {
+                                setupSenderTransform(sender, workerRecv);
+                            }
+                        });
+
+                        
+
+                        localWebSocket = new WebSocket("ws://localhost:20005/ws");
+
+                        localWebSocket.addEventListener('message', (event) => {
+                            workerRecv.postMessage({ command: 'data', data: event.data });
+                        });
+
+                        resolve();
+                    }
+                };
+                reader.readAsArrayBuffer(data);
+            });
+        } else {
+            (async function () {
+                if (firstMessagePromise) {
+                    await firstMessagePromise;
+                }
+
+                data.text().then(async function (text) {
+                    const msg = JSON.parse(text);
+                    if (!msg) {
+                        return console.log('failed to parse msg');
+                    }
+
+                    if (msg.candidate) {
+                        if (pc.remoteDescription == null) {
+                            await addCandidate(msg);
+                        } else {
+                            if (pendingCandidates.length > 0) {
+                                for (const c of pendingCandidates) {
+                                    pc.addIceCandidate(c);
+                                }
+                            }
+                            pc.addIceCandidate(msg);
+                        }
+                    } else {
+                        pc.setRemoteDescription(msg);
+
+                        if (pendingCandidates.length > 0) {
+                            for (const c of pendingCandidates) {
+                                pc.addIceCandidate(c);
+                            }
+                        }
+
+                        pc.createAnswer().then(setLocalAndSendMessage);
+                    }
+                });
+            })();
+        }
+    }
+</script>

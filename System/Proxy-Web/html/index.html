@@ -1,0 +1,362 @@
+<!doctype html>
+<video id="local" controls loop>
+    <source src="videos/a.webm" type="video/webm">
+</video>
+
+<canvas id="canvas" width="640" height="480"></canvas>
+<!-- <input type="text" id="inputField" placeholder="Enter text here">
+<input type="text" id="bits" placeholder="Enter text here">
+<input type="text" id="bitsa" placeholder="Enter text here">
+<input type="text" id="inputFielda" placeholder="Enter text here"> -->
+<script>   
+    const READY_PION                = 0;
+    const READY_WEB = 5
+    const RECEIVED_WEB         = 3;
+    const interval             = 3000;
+
+    const configuration = {
+        iceServers: [
+    
+        ], 
+        encodedInsertableStreams: true,
+        forceEncodedVideoInsertableStreams: true
+    };
+
+    const signalingConn = new WebSocket("wss://localhost:20000/ws");
+    const pc = new RTCPeerConnection(configuration)
+
+    pc.onicecandidate = onIceCandidate;
+
+    pc.onicegatheringstatechange = gatheringStateChange;
+
+    function gatheringStateChange() {
+        console.log(pc.iceGatheringState)
+    }
+
+    function onIceCandidate(e){
+        if (e.candidate && e.candidate.candidate !== "") {
+            signalingConn.send(JSON.stringify(e.candidate))
+        }
+    }
+
+    
+    // let bitrateInterval;
+    // let startTime;
+    // let lastBytesSent = 0;      // Last bytes sent at the previous stats check
+    // let totalBytesSent = 0;    // Total bytes sent during the 5 minutes
+    // let targetDuration = 5 * 60 * 1000; // 5 minutes in milliseconds
+    // let fpsSum = 0;
+    // let sampleCount = 0;
+
+    // let fpsSum_i = 0;
+    // let sampleCount_i = 0;
+
+   // // Function to calculate average bitrate after 5 minutes
+    // function calculateBitrate() {
+        // pc.getStats().then(stats => {
+            // stats.forEach(report => {
+                // if (report.type === 'inbound-rtp' && report.kind === 'video' && pc.connectionState == "connected") {
+                    // const fps = report.framesPerSecond;
+                 
+
+                    // if (fps !== undefined) {
+                        // fpsSum += fps;
+                        // sampleCount++;
+                    // }
+
+                    // const elapsedTime = Date.now() - startTime;
+                    // if (elapsedTime >= targetDuration) {
+                        // const averageFPS = fpsSum / sampleCount;
+                        
+                        // const af = document.getElementById('bits');
+
+
+                        // af.value = `${averageFPS}`;
+                        // clearInterval(bitrateInterval); 
+                    // }
+                // }
+
+                // if (report.type === 'outbound-rtp' && report.kind === 'video' && pc.connectionState == "connected") {
+                    // const fps = report.framesPerSecond;
+                 
+
+                    // if (fps !== undefined) {
+                        // fpsSum_i += fps;
+                        // sampleCount_i++;
+                    // }
+
+                    // const elapsedTime = Date.now() - startTime;
+                    // if (elapsedTime >= targetDuration) {
+                        // const averageFPS = fpsSum / sampleCount;
+                        
+                        // const af = document.getElementById('bitsa');
+
+
+                        // af.value = `outbound: ${averageFPS}`;
+                        // clearInterval(bitrateInterval); 
+                    // }
+                // }
+            // });
+        // }).catch(error => console.error("Error getting stats:", error));
+    // } 
+
+    // const inputField = document.getElementById('inputField');
+    // const inputFielda = document.getElementById('inputFielda');
+    
+    // Function to log the current outbound video resolution
+    //async function logOutboundVideoResolution() {
+        // // Get the video sender
+        // const videoSender = pc.getSenders().find(sender => sender.track && sender.track.kind === 'video');
+        
+        // if (videoSender) {
+            // try {
+                // // Retrieve the stats report for the video sender
+                // const stats = await videoSender.getStats();
+                
+                // stats.forEach(report => {
+                    // // Look for outbound-rtp type reports
+                    // if (report.type === 'outbound-rtp' && report.kind === 'video') {
+                        // // Extract and log the frame width and height
+                        // const frameWidth = report.frameWidth || 'N/A';
+                        // const frameHeight = report.frameHeight || 'N/A';
+                        // inputField.value = `Outbound video resolution: ${frameWidth}x${frameHeight}`;
+                    // }
+
+                    // if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                        // // Extract and log the frame width and height
+                        // const frameWidth = report.frameWidth || 'N/A';
+                        // const frameHeight = report.frameHeight || 'N/A';
+                        // inputFielda.value = `inbound video resolution: ${frameWidth}x${frameHeight}`;
+                    // }
+                // });
+            // } catch (error) {
+                // console.error('Error retrieving stats:', error);
+            // }
+        // }
+    // }
+
+    // // Call the function periodically to monitor resolution changes
+    // setInterval(logOutboundVideoResolution, 5000); // Logs every 5 seconds
+    
+
+    pc.addEventListener('connectionstatechange', event => {
+        console.log(pc.connectionState)
+        if(pc.connectionState == "disconnected" || pc.connectionState == "failed"){
+            if(pingInterval != null){
+                clearInterval(pingInterval)
+            }
+
+            if( pc.connectionState == "failed"){
+                location.reload(true);
+            }
+        }
+        if (pc.connectionState == "connected"){
+            document.querySelector('#local').play();
+            //clearInterval(pingInterval)
+            //startTime = Date.now();
+            //bitrateInterval = setInterval(calculateBitrate, 1000);
+        }
+    });
+
+    const localVideo = document.querySelector('#local');
+    
+    let finishedProtocol = false;
+    let bridgeConn;
+    let stream;
+    let pingInterval = null;
+
+    pc.ontrack = e => {
+        if(e.track.kind == "video"){
+            setupReceiverTransform(e.receiver);
+        }
+    };
+
+    let workerSend;
+    if (navigator.userAgent.toLowerCase().includes('firefox')) {
+        workerSend = new Worker('/Firefox/workerSend.js');    
+    }else{
+        workerSend = new Worker('/Chrome/workerSend.js');   
+    }
+
+    const canvas = document.querySelector('#canvas')
+        const ctx = canvas.getContext('2d');
+        
+        function handleEncodedFrame(chunk) {
+            workerSend.postMessage({ command: "chunk", c: chunk });
+        }
+
+        const encoder = new VideoEncoder({
+            output: handleEncodedFrame,
+            error: (e) => console.error(e),
+        });
+
+        encoder.configure({
+            codec: 'vp8',
+            width: 640,
+            height: 480,
+            bitrate: 500_000,
+            framerate: 30,
+        });
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        createImageBitmap(canvas).then(imageBitmap => {
+            const videoFrame = new VideoFrame(imageBitmap, { timestamp: performance.now() * 1000 });
+            encoder.encode(videoFrame);
+            videoFrame.close();
+        });
+
+    
+    function setupReceiverTransform(receiver) {
+        if (navigator.userAgent.toLowerCase().includes('firefox')) {
+            receiver.transform = new RTCRtpScriptTransform(workerSend);  
+        }else{
+            const receiverStreams = receiver.createEncodedStreams();
+            const {
+                readable,
+                writable
+            } = receiverStreams;
+            workerSend.postMessage({command:"init", r: readable, w: writable}, [readable, writable])
+        }
+    }
+
+    workerSend.onmessage = function(event) {
+        const message = event.data;
+    
+        if (message.command == "data") {
+            bridgeConn.send(message.data)
+        }
+    };
+
+    function getStream() {
+        if (localVideo.captureStream) {
+            stream = localVideo.captureStream();
+        } else if (localVideo.mozCaptureStream) {
+            stream = localVideo.mozCaptureStream();
+        } else {
+            console.log('captureStream() not supported');
+        }
+    }
+
+    function waitForCanPlay(videoElement) {
+        return new Promise((resolve) => {
+            if (videoElement.readyState < 3){
+                videoElement.oncanplay = () => {
+                    getStream();
+                    resolve();
+                };
+            }else{
+                getStream()
+                resolve();
+            }
+        });
+    }
+
+    function setupSenderTransform(sender, workerRecv) {
+        if (navigator.userAgent.toLowerCase().includes('firefox')) {
+            sender.transform = new RTCRtpScriptTransform(workerRecv);  
+        }else{
+            const senderStreams = sender.createEncodedStreams();
+            const {
+                readable,
+                writable
+            } = senderStreams;
+        
+            workerRecv.postMessage({command:"init", r: readable, w: writable }, [readable, writable])
+        }
+    }
+  
+    signalingConn.addEventListener('open', (event) => {
+        console.log('WebSocket connection opened');
+        let message = new Uint8Array([RECEIVED_WEB]);
+        signalingConn.send(message);
+
+        pingInterval = setInterval(function() {
+            signalingConn.send("ping"); 
+        }, interval);
+    });
+
+    signalingConn.addEventListener('message', (event) => {
+        handleMessages(event.data)
+    });
+
+    function handleMessages(data){
+        if(!finishedProtocol){
+            finishedProtocol = true; 
+            
+            const reader = new FileReader();
+            reader.onload = async function () {
+                const arrayBuffer = reader.result;
+                let buffer = new Uint8Array(arrayBuffer)
+                
+                if(buffer[0] == READY_PION || buffer[0] == READY_WEB){
+                    let slice = buffer.slice(1);
+                    let decoder = new TextDecoder('utf-8');
+                    let decodedString = decoder.decode(slice);
+                    let workerRecv;    
+                
+                    if(buffer[0] == READY_PION){
+                        if (navigator.userAgent.toLowerCase().includes('firefox')) {
+                            workerRecv = new Worker('/Firefox/workRecvPion.js');
+                        }else{
+                            workerRecv = new Worker('/Chrome/workRecvPion.js');
+                        }
+                    }else{
+                        if (navigator.userAgent.toLowerCase().includes('firefox')) {
+                            workerRecv = new Worker('/Firefox/workRecvWeb.js');
+                        }else{
+                            workerRecv = new Worker('/Chrome/workRecvWeb.js');  
+                        }
+                    }
+                                  
+                    bridgeConn = new WebSocket(decodedString);
+                    
+                    bridgeConn.addEventListener('message', (event) => {
+                        workerRecv.postMessage({command:'data', data: event.data})
+                    });
+        
+                    await waitForCanPlay(localVideo)
+
+                    stream.getTracks().forEach(track => {
+                        pc.addTrack(track, stream)
+                    })
+
+                    //const sender = pc.getSenders().find(s => s.track.kind === 'video');
+                    //const params = sender.getParameters();
+                    //params.encodings[0].maxBitrate = 5000000;
+                    //await sender.setParameters(params);
+
+
+                    pc.getSenders().forEach(
+                        function(sender){
+                            setupSenderTransform(sender, workerRecv)
+                        }
+                    );
+
+                    pc.createOffer().then(offer =>  {
+                        pc.setLocalDescription(offer)
+                            signalingConn.send(JSON.stringify(offer))
+                    })
+                }
+            };
+            reader.readAsArrayBuffer(data);
+    
+    } else {
+        data.text().then(text => {
+            if(text == "R"){
+                location.reload(true);
+            }
+            const msg = JSON.parse(text);
+            if (!msg) {
+                return console.log('failed to parse msg')
+            }
+            
+            if (msg.candidate) {
+                pc.addIceCandidate(msg)
+            } else {    
+                pc.setRemoteDescription(msg)
+            }    
+        })  
+        }
+    }
+</script>
